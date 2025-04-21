@@ -1,4 +1,4 @@
-# colorectal-cancer-WGCNA
+# Colorectal-Cancer-WGCNA
 Identification of key genes in colorectal cancer diagnosis using Weighted Gene Co-Expression Network Analysis (WGCNA) on GEO and TCGA datasets.
 
 # Identification of Key Genes in Colorectal Cancer Using WGCNA
