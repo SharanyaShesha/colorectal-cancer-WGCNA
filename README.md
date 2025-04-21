@@ -99,6 +99,7 @@ This includes:
 - [DGIdb – Drug-Gene Interaction database](https://www.dgidb.org/)
 ---
 ---
+###  **Authors**
 
 ##  Installation
 
@@ -106,9 +107,9 @@ Install key R dependencies using:
 
 ```r
 install.packages(c("WGCNA", "limma", "clusterProfiler", "TCGAbiolinks", "multiMiR"))
-
-
-### **Authors**
+```
+---
+###  **Authors**
 **Sharanya Sheshadri**  
 Ellie Cates  
 Saranya Guvvala  
