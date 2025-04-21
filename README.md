@@ -99,8 +99,6 @@ This includes:
 - [DGIdb – Drug-Gene Interaction database](https://www.dgidb.org/)
 ---
 ---
-###  **Authors**
-
 ##  Installation
 
 Install key R dependencies using:
