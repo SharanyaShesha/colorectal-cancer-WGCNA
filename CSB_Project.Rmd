@@ -1,0 +1,1561 @@
+---
+title: "CSB Project"
+author: "Sharanya Sheshadri"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Load Packages
+```{r, warning=FALSE, message=FALSE, results='hide'}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+# Define the packages we need
+packages <- c("GEOquery", "limma", "hgu133a.db", "annotate", "clusterProfiler", "org.Hs.eg.db", "STRINGdb", "RCy3", "multiMiR", "TCGAbiolinks", "SummarizedExperiment")
+
+# For each package, check if it's installed and install if not
+for (pkg in packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    message(paste0("Installing package: ", pkg))
+    BiocManager::install(pkg)
+  } else {
+    message(paste0("Package already installed: ", pkg))
+  }
+}
+
+# Load all packages
+lapply(packages, library, character.only = TRUE)
+
+# Define the packages we need
+packages <- c("WGCNA", "ggplot2", "dplyr", "stringr", "pheatmap", "ggVennDiagram", "igraph", "tidygraph", "ggraph", "visNetwork", "htmlwidgets", "webshot", "pdftools", "gridExtra", "grid", "ggrepel","survival", "survminer", "readr", "knitr", "kableExtra")
+
+# For each package, check if it's installed and install if not
+for (pkg in packages) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    message(paste0("Installing package: ", pkg))
+    install.packages(pkg)
+  } else {
+    message(paste0("Package already installed: ", pkg))
+  }
+}
+
+# Load all packages
+apply(packages, library, character.only = TRUE)
+```
+
+# Download Data
+```{r}
+# Download the GEO datasets
+gse41258 <- getGEO("GSE41258", GSEMatrix = TRUE)
+gse68204 <- getGEO("GSE68204", GSEMatrix = TRUE)
+gse62322 <- getGEO("GSE62322", GSEMatrix = TRUE)
+
+# Extract expression matrices
+expr_gse41258 <- exprs(gse41258[[1]])
+expr_gse68204 <- exprs(gse68204[[1]])
+expr_gse62322 <- exprs(gse62322[[1]])
+
+# Extract phenotype data
+pheno_gse41258 <- pData(gse41258[[1]])
+pheno_gse68204 <- pData(gse68204[[1]])
+pheno_gse62322 <- pData(gse62322[[1]])
+
+# Extract feature data for mapping probes to genes
+feat_gse41258 <- fData(gse41258[[1]])
+feat_gse68204 <- fData(gse68204[[1]])
+feat_gse62322 <- fData(gse62322[[1]])
+```
+
+# Preprocess Data
+## GSE41258
+```{r}
+# 1. Filter GSE41258 to select tumor and normal samples
+# Extract sample information to identify normal and tumor samples
+sample_info_41258 <- pheno_gse41258$characteristics_ch1
+tumor_indices <- grep("Primary Tumor", sample_info_41258)
+normal_indices <- grep("Normal Colon", sample_info_41258)
+
+# Extract tumor and normal samples
+tumor_samples_41258 <- expr_gse41258[, tumor_indices]
+normal_samples_41258 <- expr_gse41258[, normal_indices]
+
+# Combine for DEG analysis later
+combined_samples_41258 <- cbind(normal_samples_41258, tumor_samples_41258)
+sample_type_41258 <- c(rep("normal", ncol(normal_samples_41258)), 
+                       rep("tumor", ncol(tumor_samples_41258)))
+
+# 2. Normalize the data using quantile normalization
+combined_samples_41258_norm <- normalizeQuantiles(combined_samples_41258)
+
+# 3. Check if the data is log2 transformed
+# If the values are not in log2 scale (e.g., if they have a wide range like 0-10000),
+# then transform them
+if(max(combined_samples_41258_norm, na.rm = TRUE) > 100) {
+  # Add a small value to avoid log(0)
+  combined_samples_41258_norm <- log2(combined_samples_41258_norm + 1)
+  print("Applied log2 transformation to GSE41258 data")
+} else {
+  print("GSE41258 data appears to be already log-transformed")
+}
+
+boxplot(combined_samples_41258_norm, outline=FALSE)
+```
+
+## GSE62322
+```{r}
+# GSE62322 (validation dataset)
+# Filter samples
+sample_info_62322 <- pheno_gse62322$characteristics_ch1
+tumor_indices_62322 <- grep("Primary Tumor", sample_info_62322)
+normal_indices_62322 <- grep("Normal Colon", sample_info_62322)
+
+tumor_samples_62322 <- expr_gse62322[, tumor_indices_62322]
+normal_samples_62322 <- expr_gse62322[, normal_indices_62322]
+
+combined_samples_62322 <- cbind(normal_samples_62322, tumor_samples_62322)
+sample_type_62322 <- c(rep("normal", ncol(normal_samples_62322)), 
+                       rep("tumor", ncol(tumor_samples_62322)))
+
+# Normalize
+combined_samples_62322_norm <- normalizeQuantiles(combined_samples_62322)
+
+# Check and transform if needed
+range(combined_samples_62322_norm)
+if(max(combined_samples_62322_norm, na.rm = TRUE) > 100) {
+  combined_samples_62322_norm <- log2(combined_samples_62322_norm + 1)
+  print("Applied log2 transformation to GSE62322 data")
+} else {
+  print("GSE62322 data appears to be already log-transformed")
+}
+```
+
+## GSE68204
+```{r}
+# GSE68204 (miRNA dataset)
+# Filter samples
+sample_info_68204 <- pheno_gse68204$characteristics_ch1.2
+tumor_indices_68204 <- grep("Tumour", sample_info_68204)
+normal_indices_68204 <- grep("Normal", sample_info_68204)
+
+tumor_samples_68204 <- expr_gse68204[, tumor_indices_68204]
+normal_samples_68204 <- expr_gse68204[, normal_indices_68204]
+
+combined_samples_68204 <- cbind(normal_samples_68204, tumor_samples_68204)
+sample_type_68204 <- c(rep("normal", ncol(normal_samples_68204)), 
+                       rep("tumor", ncol(tumor_samples_68204)))
+
+# Normalize
+combined_samples_68204_norm <- normalizeQuantiles(combined_samples_68204)
+
+# Check and transform if needed
+range(combined_samples_68204_norm)
+if(max(combined_samples_68204_norm, na.rm = TRUE) > 100) {
+  combined_samples_68204_norm <- log2(combined_samples_68204_norm + 1)
+  print("Applied log2 transformation to GSE68204 data")
+} else {
+  print("GSE68204 data appears to be already log-transformed")
+}
+```
+
+# Convert Probe ID to Genes
+## GSE41258
+```{r}
+# Get the platform annotation
+platform_gse41258 <- annotation(gse41258[[1]])
+print(platform_gse41258)  # Should print "GPL96"
+
+# Convert probe IDs to gene symbols for GSE41258
+probe_ids_41258 <- rownames(combined_samples_41258_norm)
+gene_symbols_41258 <- mapIds(hgu133a.db, 
+                             keys = probe_ids_41258,
+                             column = "SYMBOL",
+                             keytype = "PROBEID",
+                             multiVals = "first")
+
+# Some probes might not map to gene symbols, handle those
+genes_41258 <- data.frame(
+  probe_id = probe_ids_41258,
+  gene_symbol = gene_symbols_41258,
+  stringsAsFactors = FALSE
+)
+
+# Check how many probes were mapped to gene symbols
+sum(!is.na(genes_41258$gene_symbol))
+sum(is.na(genes_41258$gene_symbol))
+
+# Create a new expression matrix with gene symbols as row names
+# For probes that map to the same gene, we'll keep the one with highest variance
+expr_with_genes_41258 <- data.frame(combined_samples_41258_norm)
+expr_with_genes_41258$gene_symbol <- gene_symbols_41258
+
+# Remove probes without gene symbols
+expr_with_genes_41258 <- expr_with_genes_41258[!is.na(expr_with_genes_41258$gene_symbol), ]
+
+# For probes mapping to the same gene, keep the one with highest variance
+expr_with_genes_41258$variance <- apply(expr_with_genes_41258[, 1:(ncol(expr_with_genes_41258)-2)], 1, var)
+expr_with_genes_41258 <- expr_with_genes_41258[order(expr_with_genes_41258$gene_symbol, 
+                                                    -expr_with_genes_41258$variance), ]
+expr_with_genes_41258 <- expr_with_genes_41258[!duplicated(expr_with_genes_41258$gene_symbol), ]
+
+# Create final expression matrix with gene symbols as row names
+expr_gse41258_genes <- expr_with_genes_41258[, 1:(ncol(expr_with_genes_41258)-2)]
+rownames(expr_gse41258_genes) <- expr_with_genes_41258$gene_symbol
+
+```
+
+## GSE62322
+```{r}
+# Get the platform annotation
+platform_gse62322 <- annotation(gse62322[[1]])
+print(platform_gse62322)  # Should print "GPL96"
+
+# Convert probe IDs to gene symbols for GSE62322
+probe_ids_62322 <- rownames(combined_samples_62322_norm)
+gene_symbols_62322 <- mapIds(hgu133a.db, 
+                             keys = probe_ids_62322,
+                             column = "SYMBOL",
+                             keytype = "PROBEID",
+                             multiVals = "first")
+
+# Some probes might not map to gene symbols, handle those
+genes_62322 <- data.frame(
+  probe_id = probe_ids_62322,
+  gene_symbol = gene_symbols_62322,
+  stringsAsFactors = FALSE
+)
+
+# Check how many probes were mapped to gene symbols
+sum(!is.na(genes_62322$gene_symbol))
+sum(is.na(genes_62322$gene_symbol))
+
+# Create a new expression matrix with gene symbols as row names
+# For probes that map to the same gene, we'll keep the one with highest variance
+expr_with_genes_62322 <- data.frame(combined_samples_62322_norm)
+expr_with_genes_62322$gene_symbol <- gene_symbols_62322
+
+# Remove probes without gene symbols
+expr_with_genes_62322 <- expr_with_genes_62322[!is.na(expr_with_genes_62322$gene_symbol), ]
+
+# For probes mapping to the same gene, keep the one with highest variance
+expr_with_genes_62322$variance <- apply(expr_with_genes_62322[, 1:(ncol(expr_with_genes_62322)-2)], 1, var)
+expr_with_genes_62322 <- expr_with_genes_62322[order(expr_with_genes_62322$gene_symbol, 
+                                                    -expr_with_genes_62322$variance), ]
+expr_with_genes_62322 <- expr_with_genes_62322[!duplicated(expr_with_genes_62322$gene_symbol), ]
+
+# Create final expression matrix with gene symbols as row names
+expr_gse62322_genes <- expr_with_genes_62322[, 1:(ncol(expr_with_genes_62322)-2)]
+rownames(expr_gse62322_genes) <- expr_with_genes_62322$gene_symbol
+```
+
+## GSE68204
+```{r, include=FALSE}
+# For GSE68204 (miRNA dataset), we need a different annotation approach
+# The platform is GPL10850 (Agilent Human miRNA Microarray)
+# Check the column containing miRNA names in the feature data
+fData_68204 <- fData(gse68204[[1]])
+head(fData_68204)
+
+# Look for column that contains miRNA identifiers
+# This might be "NAME", "SPOT_ID", or something else
+miRNA_col <- grep("NAME|SPOT_ID|miRNA|ID", colnames(fData_68204), value = TRUE)[1]
+miRNA_ids <- fData_68204[, miRNA_col]
+
+# Create a mapping between probe IDs and miRNA names
+miRNA_mapping <- data.frame(
+  probe_id = rownames(fData_68204),
+  miRNA_id = miRNA_ids,
+  stringsAsFactors = FALSE
+)
+
+# Map expression data to miRNA IDs
+expr_with_miRNA_68204 <- data.frame(expr_gse68204)
+expr_with_miRNA_68204$miRNA_id <- miRNA_mapping$miRNA_id[match(rownames(expr_with_miRNA_68204), 
+                                                               miRNA_mapping$probe_id)]
+expr_with_miRNA_68204 <- expr_with_miRNA_68204[!is.na(expr_with_miRNA_68204$miRNA_id), ]
+
+# For probes mapping to the same miRNA, keep the one with highest variance
+expr_with_miRNA_68204$variance <- apply(expr_with_miRNA_68204[, 1:(ncol(expr_with_miRNA_68204)-2)], 1, var)
+expr_with_miRNA_68204 <- expr_with_miRNA_68204[order(expr_with_miRNA_68204$miRNA_id, 
+                                                    -expr_with_miRNA_68204$variance), ]
+expr_with_miRNA_68204 <- expr_with_miRNA_68204[!duplicated(expr_with_miRNA_68204$miRNA_id), ]
+
+# Create final expression matrix
+expr_gse68204_miRNA <- expr_with_miRNA_68204[, 1:(ncol(expr_with_miRNA_68204)-2)]
+rownames(expr_gse68204_miRNA) <- expr_with_miRNA_68204$miRNA_id
+```
+
+# DEG Identification
+## GSE41258
+```{r}
+# GSE41258 (primary dataset)
+design_41258 <- model.matrix(~0+factor(sample_type_41258))
+colnames(design_41258) <- c("normal", "tumor")
+
+# Fit the linear model
+fit_41258 <- lmFit(expr_gse41258_genes, design_41258)
+
+# Define the contrast matrix for tumor vs normal
+contrast.matrix_41258 <- makeContrasts(tumor-normal, levels=design_41258)
+
+# Fit the contrast
+fit2_41258 <- contrasts.fit(fit_41258, contrast.matrix_41258)
+fit2_41258 <- eBayes(fit2_41258)
+
+# Get the results with adjusted p-values
+results_41258 <- topTable(fit2_41258, number=Inf, adjust.method="BH")
+
+# Filter DEGs based on criteria from the paper: adj.P.Val < 0.05 and |logFC| > 1
+degs_41258 <- results_41258[results_41258$adj.P.Val < 0.05 & abs(results_41258$logFC) > 1, ]
+
+# Check how many up and down-regulated genes
+up_regulated_41258 <- degs_41258[degs_41258$logFC > 1, ]
+down_regulated_41258 <- degs_41258[degs_41258$logFC < -1, ]
+
+cat("Number of DEGs in GSE41258:", nrow(degs_41258), "\n")
+cat("Up-regulated:", nrow(up_regulated_41258), "\n")
+cat("Down-regulated:", nrow(down_regulated_41258), "\n")
+```
+
+## GSE62322
+```{r}
+# And for the validation dataset (GSE62322)
+design_62322 <- model.matrix(~0+factor(sample_type_62322))
+colnames(design_62322) <- c("normal", "tumor")
+
+fit_62322 <- lmFit(expr_gse62322_genes, design_62322)
+contrast.matrix_62322 <- makeContrasts(tumor-normal, levels=design_62322)
+fit2_62322 <- contrasts.fit(fit_62322, contrast.matrix_62322)
+fit2_62322 <- eBayes(fit2_62322)
+
+results_62322 <- topTable(fit2_62322, number=Inf, adjust.method="BH")
+degs_62322 <- results_62322[results_62322$adj.P.Val < 0.05 & abs(results_62322$logFC) > 1, ]
+
+up_regulated_62322 <- degs_62322[degs_62322$logFC > 1, ]
+down_regulated_62322 <- degs_62322[degs_62322$logFC < -1, ]
+
+cat("Number of DEGs in GSE62322:", nrow(degs_62322), "\n")
+cat("Up-regulated:", nrow(up_regulated_62322), "\n")
+cat("Down-regulated:", nrow(down_regulated_62322), "\n")
+```
+
+## GSE68204
+```{r}
+# Repeat the same process for the miRNA dataset (GSE68204)
+design_68204 <- model.matrix(~0+factor(sample_type_68204))
+colnames(design_68204) <- c("normal", "tumor")
+
+fit_68204 <- lmFit(combined_samples_68204_norm, design_68204)
+contrast.matrix_68204 <- makeContrasts(tumor-normal, levels=design_68204)
+fit2_68204 <- contrasts.fit(fit_68204, contrast.matrix_68204)
+fit2_68204 <- eBayes(fit2_68204)
+
+results_68204 <- topTable(fit2_68204, number=Inf, adjust.method="BH")
+demirs_68204 <- results_68204[results_68204$adj.P.Val < 0.05 & abs(results_68204$logFC) > 1, ]
+
+up_regulated_68204 <- demirs_68204[demirs_68204$logFC > 1, ]
+down_regulated_68204 <- demirs_68204[demirs_68204$logFC < -1, ]
+
+cat("Number of DEmiRs in GSE68204:", nrow(demirs_68204), "\n")
+cat("Up-regulated:", nrow(up_regulated_68204), "\n")
+cat("Down-regulated:", nrow(down_regulated_68204), "\n")
+```
+
+## Volcano Plots
+```{r}
+# Create volcano plots to visualize DEGs
+# GSE41258
+volcano_41258 <- data.frame(
+  Gene = rownames(results_41258),
+  logFC = results_41258$logFC,
+  pvalue = -log10(results_41258$adj.P.Val)
+)
+
+volcano_41258$Significance <- ifelse(results_41258$adj.P.Val < 0.05 & abs(results_41258$logFC) > 1,
+                                  ifelse(results_41258$logFC > 1, "Up-regulated", "Down-regulated"),
+                                  "Not significant")
+
+ggplot(volcano_41258, aes(x = logFC, y = pvalue, color = Significance)) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("Not significant" = "grey", 
+                                "Up-regulated" = "red", 
+                                "Down-regulated" = "blue")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot of DEGs in GSE41258",
+       x = "Log2 Fold Change",
+       y = "-log10(adjusted p-value)") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed")
+
+# Save DEGs for WGCNA analysis
+#write.csv(degs_41258, "degs_gse41258.csv")
+#write.csv(demirs_68204, "demirs_gse68204.csv")
+#write.csv(degs_62322, "degs_gse62322.csv")
+```
+
+##Clean Up Environment
+```{r}
+keep <- c("expr_gse41258_genes", "expr_gse62322_genes", "combined_samples_68204_norm", "degs_41258", "degs_62322", "degs_68204")
+rm(list=setdiff(ls(), keep))
+```
+
+# WGCNA Analysis
+## Prepare Data for WGCNA
+```{r}
+# Extract expression data for the DEGs from normalized data
+degs_names <- rownames(degs_41258)
+expr_data_degs <- expr_gse41258_genes[degs_names, ]
+
+# Transpose the data for WGCNA (genes should be in columns)
+expr_data_degs_t <- t(expr_data_degs)
+```
+
+## Soft-thresholding power (beta)
+```{r}
+# The paper mentioned they used a power of 6
+powers <- c(1:20)
+sft <- pickSoftThreshold(expr_data_degs_t, powerVector = powers, verbose = 5)
+
+# First, create the jpg file
+#jpeg(filename = "scale_free_topology_plots.jpg", width = 1000, height = 500, quality = 100)
+
+# Plot the scale-free topology fit index as a function of the soft-thresholding power
+par(mfrow = c(1, 2))
+# Scale-free topology fit index as a function of the soft-thresholding power
+plot(sft$fitIndices[, 1], -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)",
+     ylab = "Scale Free Topology Model Fit, signed R^2",
+     type = "n",
+     main = paste("Scale independence"))
+text(sft$fitIndices[, 1], -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = 0.9, col = "red")
+abline(h = 0.90, col = "red")
+
+# Mean connectivity as a function of the soft-thresholding power
+plot(sft$fitIndices[, 1], sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)",
+     ylab = "Mean Connectivity",
+     type = "n",
+     main = paste("Mean connectivity"))
+text(sft$fitIndices[, 1], sft$fitIndices[, 5], labels = powers, cex = 0.9, col = "red")
+
+#dev.off()
+```
+
+## Construct the co-expression network
+```{r}
+#power from the paper (power = 6)
+softPower <- 14
+adjacency <- adjacency(expr_data_degs_t, power = softPower)
+
+# Step 4: Turn adjacency into topological overlap
+TOM <- TOMsimilarity(adjacency)
+dissTOM <- 1 - TOM
+
+# Step 5: Cluster using TOM dissimilarity
+geneTree <- hclust(as.dist(dissTOM), method = "average")
+
+# Step 6: Define modules
+# The paper doesn't specify the exact parameters, but we'll use standard ones
+minModuleSize <- 30  # Minimum module size
+# Module identification using dynamic tree cut
+dynamicMods <- cutreeDynamic(dendro = geneTree, distM = dissTOM, 
+                            deepSplit = 2, pamRespectsDendro = FALSE,
+                            minClusterSize = minModuleSize)
+table(dynamicMods)
+
+# Convert numeric labels to colors
+dynamicColors <- labels2colors(dynamicMods)
+table(dynamicColors)
+
+# Step 7: Merge modules whose expression profiles are very similar
+# Calculate eigengenes
+MEList <- moduleEigengenes(expr_data_degs_t, colors = dynamicColors)
+MEs <- MEList$eigengenes
+
+# Calculate dissimilarity of module eigengenes
+MEDiss <- 1 - cor(MEs)
+METree <- hclust(as.dist(MEDiss), method = "average")
+
+# Plot the result
+plot(METree, main = "Clustering of module eigengenes",
+     xlab = "", sub = "")
+
+# Set a cut height for merging modules (e.g., 0.25, meaning correlation of 0.75)
+MEDissThres <- 0.25
+merge <- mergeCloseModules(expr_data_degs_t, dynamicColors, cutHeight = MEDissThres, verbose = 3)
+mergedColors <- merge$colors
+mergedMEs <- merge$newMEs
+
+# Plot the gene dendrogram and module colors after merging
+plotDendroAndColors(geneTree, cbind(dynamicColors, mergedColors),
+                   c("Dynamic Tree Cut", "Merged dynamic"),
+                   dendroLabels = FALSE, hang = 0.03,
+                   addGuide = TRUE, guideHang = 0.05)
+
+# Save the module colors and merged module colors
+moduleColors <- mergedColors
+colorOrder <- c("grey", standardColors(50))
+moduleLabels <- match(moduleColors, colorOrder) - 1
+MEs <- mergedMEs
+```
+
+# Relate Modules to Clinical Traits
+```{r}
+# Extract tumor and normal samples
+tumor_pheno_41258 <- pheno_gse41258[tumor_indices, ]
+normal_pheno_41258 <- pheno_gse41258[normal_indices, ]
+
+# Combine for DEG analysis later
+combined_pheno_41258 <- rbind(tumor_pheno_41258, normal_pheno_41258)
+
+# Extract clinical traits from the phenotype data based on column names
+clinical_traits <- data.frame(row.names = colnames(combined_samples_41258))
+
+# Extract age (numeric)
+if ("age:ch1" %in% colnames(pheno_gse41258)) {
+  clinical_traits$age <- as.numeric(pheno_gse41258[match(colnames(combined_samples_41258), rownames(pheno_gse41258)), "age:ch1"])
+}
+
+# Extract gender (M/F) and convert to binary (M=1, F=0)
+if ("gender:ch1" %in% colnames(pheno_gse41258)) {
+  clinical_traits$sex <- pheno_gse41258[match(colnames(combined_samples_41258), rownames(pheno_gse41258)), "gender:ch1"]
+  # Convert to binary for correlation analysis
+  clinical_traits$sex.binary <- ifelse(clinical_traits$sex == "M", 1, 0)
+}
+
+# Extract T stage (formatted as t: #)
+if ("characteristics_ch1.7" %in% colnames(pheno_gse41258)) {
+  t_stage_raw <- pheno_gse41258[match(colnames(combined_samples_41258), rownames(pheno_gse41258)), "characteristics_ch1.7"]
+  # Extract number after "t: "
+  clinical_traits$stage.t <- as.numeric(gsub("t: ", "", t_stage_raw))
+}
+
+# Extract N stage (formatted as n: #)
+if ("characteristics_ch1.8" %in% colnames(pheno_gse41258)) {
+  n_stage_raw <- pheno_gse41258[match(colnames(combined_samples_41258), rownames(pheno_gse41258)), "characteristics_ch1.8"]
+  # Extract number after "n: "
+  clinical_traits$stage.n <- as.numeric(gsub("n: ", "", n_stage_raw))
+}
+
+# Extract M stage (formatted as m: #)
+if ("characteristics_ch1.9" %in% colnames(pheno_gse41258)) {
+  m_stage_raw <- pheno_gse41258[match(colnames(combined_samples_41258), rownames(pheno_gse41258)), "characteristics_ch1.9"]
+  # Extract number after "m: "
+  clinical_traits$stage.m <- as.numeric(gsub("m: ", "", m_stage_raw))
+}
+
+# Extract overall stage (Roman numerals)
+if ("group stage:ch1" %in% colnames(pheno_gse41258)) {
+  stage_raw <- pheno_gse41258[match(colnames(combined_samples_41258), rownames(pheno_gse41258)), "group stage:ch1"]
+  # Convert Roman numerals to numeric
+  clinical_traits$stage <- stage_raw
+  clinical_traits$stage.tot <- sapply(stage_raw, function(x) {
+    if (is.na(x)) return(NA)
+    switch(x,
+           "I" = 1,
+           "II" = 2,
+           "III" = 3,
+           "IV" = 4,
+           NA)
+  })
+}
+
+# Extract recurrence (Yes/No/NA)
+if ("recurrence:ch1" %in% colnames(pheno_gse41258)) {
+  clinical_traits$recurrence <- pheno_gse41258[match(colnames(combined_samples_41258), rownames(pheno_gse41258)), "recurrence:ch1"]
+  # Convert to binary for correlation (Yes = 1, No = 0, NA = NA)
+  clinical_traits$recurrence.binary <- sapply(clinical_traits$recurrence, function(x) {
+    if (is.na(x)) return(NA)
+    ifelse(x == "Yes", 1, 0)
+  })
+}
+
+# Convert factor types for categorical variables
+clinical_traits$sex <- factor(clinical_traits$sex)
+clinical_traits$recurrence <- factor(clinical_traits$recurrence)
+
+# Now relate modules to clinical traits
+# Use all available numeric traits for correlation, including the binary sex variable
+numeric_traits <- clinical_traits[, c("age", "sex.binary", "stage.t", "stage.n", "stage.m", "stage.tot", "recurrence.binary")]
+numeric_traits <- numeric_traits[, sapply(numeric_traits, function(x) !all(is.na(x)))]
+
+# Calculate the correlation between MEs and clinical traits
+moduleTrait_cor <- cor(MEs, numeric_traits, use = "pairwise.complete.obs")
+moduleTrait_pvalue <- corPvalueStudent(moduleTrait_cor, nrow(numeric_traits))
+
+# Create a heatmap of module-trait relationships
+textMatrix <- paste(signif(moduleTrait_cor, 2), "\n(", signif(moduleTrait_pvalue, 1), ")", sep = "")
+dim(textMatrix) <- dim(moduleTrait_cor)
+
+#jpeg(filename = "module_clinical_relationship.jpg", width = 1000, height = 500, quality = 100)
+
+# Plot the heatmap
+par(mar = c(6, 8.5, 3, 3))
+labeledHeatmap(Matrix = moduleTrait_cor,
+               xLabels = names(numeric_traits),
+               yLabels = names(MEs),
+               ySymbols = names(MEs),
+               colorLabels = FALSE,
+               colors = blueWhiteRed(50),
+               textMatrix = textMatrix,
+               setStdMargins = FALSE,
+               cex.text = 0.5,
+               zlim = c(-1, 1),
+               main = paste("Module-trait relationships"))
+
+#dev.off()
+```
+Go with turquoise, brown, or blue
+
+# Analyze Turquoise Module
+## Extract the Turquoise Module Genes
+```{r}
+# Extract the turquoise module genes
+module_of_interest <- "turquoise"
+turquoise_module_genes <- colnames(expr_data_degs_t)[which(moduleColors == module_of_interest)]
+
+write(turquoise_module_genes, file = "turquoise_genes.txt")
+```
+
+## Functional Enrichment Analysis 
+### Perform Analysis
+```{r}
+# Convert gene symbols to Entrez IDs for functional analysis
+entrez_ids <- bitr(turquoise_module_genes, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+# Perform GO enrichment analysis
+go_bp <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "BP", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+go_cc <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "CC", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+go_mf <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "MF", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+# Perform KEGG pathway analysis
+kegg_enrich <- enrichKEGG(gene = entrez_ids$ENTREZID,
+                          organism = "hsa",
+                          pvalueCutoff = 0.05,
+                          pAdjustMethod = "BH")
+```
+
+### Plot Results
+```{r}
+# Extract data from your enrichment results
+# Get top 10 BP terms
+bp_data <- go_bp@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "BP")
+
+# Get top 10 CC terms
+cc_data <- go_cc@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "CC")
+
+# Get top 10 MF terms
+mf_data <- go_mf@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "MF")
+
+# Get top 5 KEGG terms
+kegg_data <- kegg_enrich@result %>%
+  top_n(5, -p.adjust) %>%
+  mutate(Category = "KEGG")
+
+# Combine all data
+combined_data <- rbind(
+  select(bp_data, Category, Term = Description, AdjPValue = p.adjust),
+  select(cc_data, Category, Term = Description, AdjPValue = p.adjust),
+  select(mf_data, Category, Term = Description, AdjPValue = p.adjust),
+  select(kegg_data, Category, Term = Description, AdjPValue = p.adjust)
+)
+
+# Calculate -log10(p-value) for plotting
+combined_data$NegLogPval <- -log10(combined_data$AdjPValue)
+
+# Set the order of categories
+combined_data$Category <- factor(combined_data$Category, levels = c("BP", "CC", "MF", "KEGG"))
+
+# Create a function to order terms by -log10(p-value) within each category
+create_ordered_terms <- function(data) {
+  data %>%
+    group_by(Category) %>%
+    arrange(Category, desc(NegLogPval)) %>%
+    ungroup() %>%
+    mutate(Term = factor(Term, levels = Term[order(Category, desc(NegLogPval))]))
+}
+
+# Apply the ordering function
+combined_data <- create_ordered_terms(combined_data)
+
+# Set colors for different categories (matching the example image)
+category_colors <- c("BP" = "#4DAF4A", "CC" = "#E41A1C", "MF" = "#984EA3", "KEGG" = "#377EB8")
+
+# Create the plot
+p_turq <- ggplot(combined_data, aes(x = NegLogPval, y = Term, fill = Category)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = category_colors) +
+  labs(
+    x = "-Log10(adj-P-value)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 8),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    legend.position = "left",
+    legend.title = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold")
+  ) +
+  facet_grid(Category ~ ., scales = "free_y", space = "free_y") +
+  # Remove panel spacing to make it look more like the example
+  theme(panel.spacing = unit(0, "lines"))
+
+# Display the plot
+print(p_turq)
+
+# Save the plot
+#ggsave("enrichment_barplot_grouped.png", p, width = 10, height = 10, dpi = 300)
+```
+
+# Analyze Blue Module
+## Extract Blue Genes
+```{r}
+# Extract the blue module genes
+module_of_interest <- "blue"
+blue_module_genes <- colnames(expr_data_degs_t)[which(moduleColors == module_of_interest)]
+
+write(blue_module_genes, file = "blue_genes.txt")
+```
+
+## Functional Enrichment Analysis 
+### Perform Analysis
+```{r}
+# Convert gene symbols to Entrez IDs for functional analysis
+entrez_ids <- bitr(blue_module_genes, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+# Perform GO enrichment analysis
+go_bp <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "BP", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+go_cc <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "CC", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+go_mf <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "MF", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+# Perform KEGG pathway analysis
+kegg_enrich <- enrichKEGG(gene = entrez_ids$ENTREZID,
+                          organism = "hsa",
+                          pvalueCutoff = 0.05,
+                          pAdjustMethod = "BH")
+```
+
+### Plot Results
+```{r}
+# Extract data from your enrichment results
+# Get top 10 BP terms
+bp_data <- go_bp@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "BP")
+
+# Get top 10 CC terms
+cc_data <- go_cc@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "CC")
+
+# Get top 10 MF terms
+mf_data <- go_mf@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "MF")
+
+# Get top 5 KEGG terms
+kegg_data <- kegg_enrich@result %>%
+  top_n(5, -p.adjust) %>%
+  mutate(Category = "KEGG")
+
+# Combine all data
+# Now use dplyr's select with the explicit namespace
+combined_data <- rbind(
+  dplyr::select(bp_data, Category, Term = Description, AdjPValue = p.adjust),
+  dplyr::select(cc_data, Category, Term = Description, AdjPValue = p.adjust),
+  dplyr::select(mf_data, Category, Term = Description, AdjPValue = p.adjust),
+  dplyr::select(kegg_data, Category, Term = Description, AdjPValue = p.adjust)
+)
+
+# Calculate -log10(p-value) for plotting
+combined_data$NegLogPval <- -log10(combined_data$AdjPValue)
+
+# Set the order of categories
+combined_data$Category <- factor(combined_data$Category, levels = c("BP", "CC", "MF", "KEGG"))
+
+# Create a function to order terms by -log10(p-value) within each category
+create_ordered_terms <- function(data) {
+  data %>%
+    group_by(Category) %>%
+    arrange(Category, desc(NegLogPval)) %>%
+    ungroup() %>%
+    mutate(Term = factor(Term, levels = Term[order(Category, desc(NegLogPval))]))
+}
+
+# Apply the ordering function
+combined_data <- create_ordered_terms(combined_data)
+
+# Set colors for different categories (matching the example image)
+category_colors <- c("BP" = "#4DAF4A", "CC" = "#E41A1C", "MF" = "#984EA3", "KEGG" = "#377EB8")
+
+# Create the plot
+p_blue <- ggplot(combined_data, aes(x = NegLogPval, y = Term, fill = Category)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = category_colors) +
+  labs(
+    x = "-Log10(adj-P-value)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 8),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    legend.position = "left",
+    legend.title = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold")
+  ) +
+  facet_grid(Category ~ ., scales = "free_y", space = "free_y") +
+  # Remove panel spacing to make it look more like the example
+  theme(panel.spacing = unit(0, "lines"))
+
+# Display the plot
+print(p_blue)
+
+# Save the plot
+ggsave("blue_enrichment_barplot_grouped.png", p_blue, width = 10, height = 10, dpi = 300)
+```
+
+## PPI Analysis
+### Cytoscape Hub Genes
+Use the previously exported file, blue_genes.txt, and upload this to STRINGdb. Set minimum required interaction score to 0.700 and hide disconnected nodes in the network. From there, send the network to cytoscape. Using the cytoHubba app, find the top 10 genes using MCC, MNC, and DEGREE. 
+```{r}
+blue_mcc <- c("COL1A2", "COL10A1", "SERPINH1", "COL1A1", "COL5A2", "COL11A1", "COL5A1", "BGN", "COL2A1", "THBS2")
+blue_mnc <- c("SPP1", "COL1A2", "COL10A1", "COL1A1", "COL5A2", "TIMP1", "COL11A1", "COL5A1", "BGN", "THBS2")
+blue_degree <- c("SPP1", "COL1A2", "COL10A1", "COL1A1", "COL5A2", "TIMP1", "COL11A1", "COL5A1", "BGN", "THBS2")
+
+#Get intersection of these lists for later
+blue_top <- Reduce(intersect, list(blue_mcc, blue_mnc, blue_degree))
+
+# Create the Venn diagram using ggVennDiagram
+ggvenn <- ggVennDiagram(
+  list(
+    MCC = blue_mcc,
+    MNC = blue_mnc,
+    Degree = blue_degree
+  ),
+  label = "count",
+  category.names = c("MCC", "MNC", "Degree")
+)
+
+# Customize the appearance
+ggvenn <- ggvenn +
+  scale_fill_gradient(low = "white", high = "skyblue") +
+  theme(legend.position = "none")
+
+# Display the plot
+print(ggvenn)
+```
+
+#### Volcano Plot Labeled w/ Hub Genes
+```{r}
+ggplot(volcano_41258, aes(x = logFC, y = pvalue, color = Significance)) +
+  geom_point(alpha = 0.6) +
+  scale_color_manual(values = c("Not significant" = "grey", 
+                                "Up-regulated" = "red", 
+                                "Down-regulated" = "blue")) +
+  theme_minimal() +
+  labs(title = "Volcano Plot of DEGs in GSE41258",
+       x = "Log2 Fold Change",
+       y = "-log10(adjusted p-value)") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  # Add repelled labels with arrows and black text
+  geom_label_repel(data = genes_to_label, 
+                   aes(label = Gene),
+                   fill = "white",
+                   color = "black",         # Black text color
+                   segment.color = "black", # Black arrow color
+                   arrow = arrow(length = unit(0.01, "npc")), # Add arrows
+                   box.padding = 0.5,
+                   point.padding = 0.3,
+                   force = 2,
+                   max.overlaps = 30,
+                   size = 3)
+```
+
+
+### Plot STRING
+```{r}
+# Connect to STRING database
+string_db <- STRINGdb$new(version="12.0", species=9606, score_threshold=700)
+
+# Map your turquoise genes to STRING identifiers
+mapped_genes <- string_db$map(data.frame(gene=blue_module_genes), "gene", removeUnmappedRows = TRUE)
+
+# Get interactions between these genes
+interactions <- string_db$get_interactions(mapped_genes$STRING_id)
+
+# Create mapping between STRING IDs and gene symbols
+id_mapping <- mapped_genes[, c("STRING_id", "gene")]
+id_to_symbol <- setNames(id_mapping$gene, id_mapping$STRING_id)
+
+# Create an igraph object
+g <- graph_from_data_frame(interactions[, c("from", "to", "combined_score")], directed = FALSE)
+
+# Get largest connected component if you want to focus on main network
+components <- components(g)
+largest_component <- which.max(components$csize)
+subg <- induced_subgraph(g, which(components$membership == largest_component))
+
+# Get edges for the subgraph
+subg_edges <- as_data_frame(subg)
+
+# Function to pad gene names with spaces to match the longest name
+pad_gene_name <- function(names) {
+  # Find the longest name
+  max_length <- max(nchar(names))
+  
+  # Pad each name with spaces to match the longest name
+  padded_names <- sapply(names, function(name) {
+    spaces_needed <- max_length - nchar(name)
+    left_spaces <- floor(spaces_needed / 2)
+    right_spaces <- ceiling(spaces_needed / 2)
+    return(paste0(
+      paste(rep("  ", left_spaces), collapse = ""),
+      name,
+      paste(rep("  ", right_spaces), collapse = "")
+    ))
+  })
+  
+  return(padded_names)
+}
+
+# Get all the gene symbols
+gene_symbols <- sapply(V(subg)$name, function(x) ifelse(!is.na(id_to_symbol[x]), id_to_symbol[x], x))
+gene_symbols <- unname(gene_symbols)
+
+# Apply padding to make all labels the same length
+padded_symbols <- pad_gene_name(gene_symbols)
+
+# Calculate node degree for sizing
+node_degrees <- degree(subg)
+
+# Define the list of genes you want to highlight
+highlighted_genes <- blue_top
+
+# Create nodes dataframe with custom coloring using separate columns
+nodes <- data.frame(
+  id = V(subg)$name,
+  label = padded_symbols,
+  title = gene_symbols,
+  shape = "circle",
+  size = 40,
+  stringsAsFactors = FALSE
+)
+
+# Define separate color columns
+nodes$color.background <- ifelse(gene_symbols %in% highlighted_genes, "#FF9999", "#D3D3D3")
+nodes$color.border <- ifelse(gene_symbols %in% highlighted_genes, "#CC0000", "#A9A9A9")
+
+# Correctly create the font column: one list per node
+nodes$font <- replicate(nrow(nodes), list(color = "black", size = 40, face = "normal"), simplify = FALSE)
+
+# Create edges dataframe (unchanged)
+edges <- data.frame(
+  from = subg_edges$from,
+  to = subg_edges$to,
+  value = 10,
+  title = paste("Confidence:", subg_edges$combined_score),
+  color = "lightblue",
+  arrows = "false",
+  stringsAsFactors = FALSE
+)
+
+# Create the network visualization with more spread-out nodes
+network <- visNetwork(nodes, edges, width = "2000px", height = "1500px") %>%
+  visNodes(scaling = NULL) %>%
+  visPhysics(
+    solver = "forceAtlas2Based", 
+    forceAtlas2Based = list(
+      gravitationalConstant = -800,
+      centralGravity = 0.01,
+      springLength = 200,
+      springConstant = 0.05,
+      damping = 0.4,
+      avoidOverlap = 1
+    ),
+    stabilization = list(
+      enabled = TRUE, 
+      iterations = 2000,
+      updateInterval = 25
+    )
+  ) %>%
+  visEdges(smooth = FALSE) %>%
+  visLegend(width = 0.1, position = "right", main = "Turquoise Gene Network") %>%
+  visInteraction(dragNodes = TRUE, dragView = TRUE, zoomView = TRUE) %>%
+  visEvents(
+    stabilized = "function() { this.setOptions({physics: false}); }"
+  ) %>%
+  visLayout(randomSeed = 123)
+
+# Render the network in RStudio
+network
+
+# Save the network as an HTML file
+#saveWidget(network, "turquoise_gene_network.html", selfcontained = TRUE)
+
+# Install phantomjs if not already installed
+# webshot::install_phantomjs()
+
+# Save a high-resolution screenshot
+#webshot("turquoise_gene_network.html", "turquoise_gene_network.png", 
+#        delay = 3, vwidth = 1750, vheight = 1500)
+```
+
+
+# Analyze Brown Module
+```{r}
+# Extract the turquoise module genes
+module_of_interest <- "brown"
+brown_module_genes <- colnames(expr_data_degs_t)[which(moduleColors == module_of_interest)]
+
+write(brown_module_genes, file = "brown_genes.txt")
+```
+
+## Functional Enrichment Analysis 
+### Perform Analysis
+```{r}
+# Convert gene symbols to Entrez IDs for functional analysis
+entrez_ids <- bitr(turquoise_module_genes, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+# Perform GO enrichment analysis
+go_bp <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "BP", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+go_cc <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "CC", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+go_mf <- enrichGO(gene = entrez_ids$ENTREZID, 
+                  OrgDb = org.Hs.eg.db, 
+                  ont = "MF", 
+                  pAdjustMethod = "BH", 
+                  pvalueCutoff = 0.05, 
+                  qvalueCutoff = 0.05)
+
+# Perform KEGG pathway analysis
+kegg_enrich <- enrichKEGG(gene = entrez_ids$ENTREZID,
+                          organism = "hsa",
+                          pvalueCutoff = 0.05,
+                          pAdjustMethod = "BH")
+```
+
+### Plot Results
+```{r}
+# Extract data from your enrichment results
+# Get top 10 BP terms
+bp_data <- go_bp@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "BP")
+
+# Get top 10 CC terms
+cc_data <- go_cc@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "CC")
+
+# Get top 10 MF terms
+mf_data <- go_mf@result %>%
+  top_n(10, -p.adjust) %>%
+  mutate(Category = "MF")
+
+# Get top 5 KEGG terms
+kegg_data <- kegg_enrich@result %>%
+  top_n(5, -p.adjust) %>%
+  mutate(Category = "KEGG")
+
+# Combine all data
+combined_data <- rbind(
+  select(bp_data, Category, Term = Description, AdjPValue = p.adjust),
+  select(cc_data, Category, Term = Description, AdjPValue = p.adjust),
+  select(mf_data, Category, Term = Description, AdjPValue = p.adjust),
+  select(kegg_data, Category, Term = Description, AdjPValue = p.adjust)
+)
+
+# Calculate -log10(p-value) for plotting
+combined_data$NegLogPval <- -log10(combined_data$AdjPValue)
+
+# Set the order of categories
+combined_data$Category <- factor(combined_data$Category, levels = c("BP", "CC", "MF", "KEGG"))
+
+# Create a function to order terms by -log10(p-value) within each category
+create_ordered_terms <- function(data) {
+  data %>%
+    group_by(Category) %>%
+    arrange(Category, desc(NegLogPval)) %>%
+    ungroup() %>%
+    mutate(Term = factor(Term, levels = Term[order(Category, desc(NegLogPval))]))
+}
+
+# Apply the ordering function
+combined_data <- create_ordered_terms(combined_data)
+
+# Set colors for different categories (matching the example image)
+category_colors <- c("BP" = "#4DAF4A", "CC" = "#E41A1C", "MF" = "#984EA3", "KEGG" = "#377EB8")
+
+# Create the plot
+p_brown <- ggplot(combined_data, aes(x = NegLogPval, y = Term, fill = Category)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = category_colors) +
+  labs(
+    x = "-Log10(adj-P-value)",
+    y = ""
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 8),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    legend.position = "left",
+    legend.title = element_blank(),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold")
+  ) +
+  facet_grid(Category ~ ., scales = "free_y", space = "free_y") +
+  # Remove panel spacing to make it look more like the example
+  theme(panel.spacing = unit(0, "lines"))
+
+# Display the plot
+print(p_brown)
+
+# Save the plot
+#ggsave("enrichment_barplot_grouped.png", p, width = 10, height = 10, dpi = 300)
+```
+
+# Validate Hub Genes
+## GSE62322
+```{r}
+# Replace this list with your actual hub genes from Cytoscape analysis
+hub_genes <- blue_top
+# Check if these genes are in the validation dataset
+valid_hub_genes <- hub_genes[hub_genes %in% rownames(expr_gse62322_genes)]
+if (length(valid_hub_genes) > 0) {
+  # Extract expression values for the hub genes
+  hub_gene_expr <- expr_gse62322_genes[valid_hub_genes, ]
+  
+  # Calculate mean expression in tumor vs normal
+  tumor_indices <- (length(normal_indices_62322)+1):(length(normal_indices_62322)+length(tumor_indices_62322))
+  normal_indices <- 1:length(normal_indices_62322)
+  
+  # Calculate mean expression in tumor vs normal
+  tumor_mean <- rowMeans(hub_gene_expr[, tumor_indices])
+  normal_mean <- rowMeans(hub_gene_expr[, normal_indices])
+  
+  # Calculate log2 fold change
+  log2fc <- tumor_mean - normal_mean
+  
+  # Calculate p-values
+  pvalues <- numeric(length(valid_hub_genes))
+  for (i in 1:length(valid_hub_genes)) {
+    gene <- valid_hub_genes[i]
+    t_test <- t.test(hub_gene_expr[gene, tumor_indices],
+                     hub_gene_expr[gene, normal_indices])
+    pvalues[i] <- t_test$p.value
+  }
+  
+  # Create a dataframe for plotting
+  hub_validation <- data.frame(
+    gene = valid_hub_genes,
+    normal_mean = normal_mean,
+    tumor_mean = tumor_mean,
+    log2fc = log2fc,
+    pvalue = pvalues
+  )
+  
+  # Add significance stars
+  hub_validation$stars <- ""
+  hub_validation$stars[hub_validation$pvalue < 0.05] <- "*"
+  hub_validation$stars[hub_validation$pvalue < 0.01] <- "**"
+  hub_validation$stars[hub_validation$pvalue < 0.001] <- "***"
+  
+  # Add significance levels for legend
+  hub_validation$significance <- "ns"
+  hub_validation$significance[hub_validation$pvalue < 0.05] <- "p < 0.05"
+  hub_validation$significance[hub_validation$pvalue < 0.01] <- "p < 0.01"
+  hub_validation$significance[hub_validation$pvalue < 0.001] <- "p < 0.001"
+  
+  # Order by log2fc for better visualization
+  hub_validation <- hub_validation[order(hub_validation$log2fc), ]
+  
+  # Order the genes by log2 fold change for better visualization
+  hub_validation$gene <- factor(hub_validation$gene, levels = hub_validation$gene[order(hub_validation$log2fc)])
+  
+  # Create a new column for bar colors (red for positive, blue for negative log2fc)
+  hub_validation$color <- ifelse(hub_validation$log2fc > 0, "red", "blue")
+  
+  # Create a separate data frame for the legend
+  legend_data <- data.frame(
+    label = c("p < 0.05", "p < 0.01", "p < 0.001", "Not significant"),
+    symbol = c("*", "**", "***", "")
+  )
+  
+  # Build the plot
+  p <- ggplot(hub_validation, aes(x = gene, y = log2fc, fill = color)) +
+    geom_bar(stat = "identity", width = 0.7) +
+    coord_flip() +
+    geom_text(aes(label = stars, 
+                  y = ifelse(log2fc > 0, log2fc + 0.2, log2fc - 0.2)),
+              color = "black", size = 5) +
+    scale_fill_identity() +  # Uses the color values directly
+    labs(title = "Hub Gene Expression in GSE62322",
+         x = "Gene",
+         y = "Log2 Fold Change (Tumor vs Normal)") +
+    theme_minimal(base_size = 14) +
+    theme(plot.title = element_text(hjust = 0.5),
+          axis.text.y = element_text(face = "bold", color = "black"),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          legend.position = "bottom") +
+    # Add manual legend for significance
+    annotate("text", x = Inf, y = Inf, 
+             label = "Significance:
+             * p < 0.05   
+            ** p < 0.01   
+                 *** p < 0.001", 
+             hjust = 1.2, vjust = 4, size = 4)
+  
+  # Add a horizontal line at y=0
+  p <- p + geom_hline(yintercept = 0, linetype = "dashed", color = "gray50")
+  
+  # Print the plot
+  print(p)
+  
+} else {
+  cat("None of the hub genes found in the validation dataset.\n")
+}
+```
+
+## TGCA-COAD
+```{r}
+# Your hub genes from blue module
+blue_top
+
+# Query and download TCGA-COAD data
+query_coad <- GDCquery(
+  project = "TCGA-COAD", 
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+
+# Download the data (only run this once - it's time-consuming)
+#GDCdownload(query_coad)
+
+# Prepare the data
+coad_data <- GDCprepare(query_coad)
+
+# Extract the count data
+count_matrix <- assay(coad_data)
+
+# Extract sample type information to identify tumor and normal samples
+sample_info <- colData(coad_data)
+tumor_samples <- which(sample_info$sample_type %in% c("Primary Tumor"))
+normal_samples <- which(sample_info$sample_type %in% c("Solid Tissue Normal"))
+
+# Normalize the data (using log2 transformation of TPM)
+normalized_counts <- log2(count_matrix + 1)
+
+# Function to get gene expression by gene name
+get_gene_expr <- function(gene_name) {
+  gene_id <- rowData(coad_data)[which(rowData(coad_data)$gene_name == gene_name), "gene_id"]
+  if(length(gene_id) == 0) {
+    return(NULL)
+  }
+  return(normalized_counts[gene_id, ])
+}
+
+# Extract expression values for the hub genes
+hub_gene_expr <- data.frame()
+for(gene in blue_top) {
+  expr <- get_gene_expr(gene)
+  if(!is.null(expr)) {
+    tumor_expr <- expr[tumor_samples]
+    normal_expr <- expr[normal_samples]
+    
+    # Calculate mean expression and p-value
+    tumor_mean <- mean(tumor_expr, na.rm = TRUE)
+    normal_mean <- mean(normal_expr, na.rm = TRUE)
+    log2fc <- tumor_mean - normal_mean
+    
+    t_test <- t.test(tumor_expr, normal_expr)
+    pvalue <- t_test$p.value
+    
+    # Add to dataframe
+    hub_gene_expr <- rbind(hub_gene_expr, 
+                           data.frame(Gene = gene, 
+                                      Normal_mean = normal_mean,
+                                      Tumor_mean = tumor_mean,
+                                      Log2FC = log2fc,
+                                      Pvalue = pvalue))
+  }
+}
+
+# Add significance stars
+hub_gene_expr$Stars <- ""
+hub_gene_expr$Stars[hub_gene_expr$Pvalue < 0.05] <- "*"
+hub_gene_expr$Stars[hub_gene_expr$Pvalue < 0.01] <- "**"
+hub_gene_expr$Stars[hub_gene_expr$Pvalue < 0.001] <- "***"
+
+# Order by log2FC for better visualization
+hub_gene_expr <- hub_gene_expr[order(hub_gene_expr$Log2FC), ]
+hub_gene_expr$Gene <- factor(hub_gene_expr$Gene, levels = hub_gene_expr$Gene)
+
+# Create bar plot similar to Figure 11 in the paper
+tcga_validation_plot <- ggplot(hub_gene_expr, aes(x = Gene, y = Log2FC, fill = ifelse(Log2FC > 0, "Up", "Down"))) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Stars, y = ifelse(Log2FC > 0, Log2FC + 0.2, Log2FC - 0.2)),
+            size = 5) +
+  scale_fill_manual(values = c("Up" = "red", "Down" = "blue"),
+                    name = "Regulation") +
+  labs(title = "Validation of Hub Genes in TCGA-COAD",
+       x = "Gene",
+       y = "Log2 Fold Change (Tumor vs Normal)") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank()
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50")
+
+print(tcga_validation_plot)
+```
+
+# Survival Analysis
+This was done at the GEPIA2 website (http://gepia2.cancer-pku.cn/#survival)
+```{r}
+# Directory containing your PDF plots
+pdf_dir <- "Survival_Analysis"
+
+# Get list of PDF files
+pdf_files <- list.files(pdf_dir, pattern = "*.pdf", full.names = TRUE)
+
+# Function to convert PDF to a raster object that can be plotted
+pdf_to_grob <- function(pdf_file) {
+  # Convert PDF to bitmap
+  pdf_bitmap <- pdftools::pdf_convert(pdf_file, dpi = 300, format = "png", pages = 1)
+  
+  # Read the PNG file
+  img <- png::readPNG(pdf_bitmap)
+  
+  # Create a raster grob
+  grob <- rasterGrob(img, interpolate = TRUE)
+  
+  # Clean up temporary PNG file
+  file.remove(pdf_bitmap)
+  
+  return(grob)
+}
+
+# Convert all PDFs to grobs
+plot_grobs <- lapply(pdf_files, pdf_to_grob)
+
+# Create the 4x2 grid layout
+pdf("combined_survival_plots.pdf", width = 15, height = 7)
+grid.arrange(grobs = plot_grobs, 
+             ncol = 4, 
+             nrow = 2,
+             heights = c(1, 1),  # Equal heights for both rows
+             padding = unit(0.1, "line"))  # Reduce padding between plots
+dev.off()
+
+# You can also save as PNG if needed
+png("combined_survival_plots.png", width = 3000, height = 1500, res = 300)
+grid.arrange(grobs = plot_grobs, ncol = 4, nrow = 2)
+dev.off()
+```
+
+
+# Bipartite miRNA-mRNA Network Analysis
+```{r}
+# Get the list of differentially expressed miRNAs
+demir_names <- rownames(demirs_68204)
+
+# Format miRNA names to standard format if needed
+# multiMiR expects names like "hsa-miR-940"
+# Check if they are in the correct format
+if (!all(grepl("^hsa-", demir_names))) {
+  # Preprocess miRNA names to ensure they have the "hsa-" prefix
+  demir_names <- sapply(demir_names, function(x) {
+    if (!grepl("^hsa-", x)) {
+      return(paste0("hsa-", x))
+    } else {
+      return(x)
+    }
+  })
+}
+
+# Get predicted targets for the DEmiRs (this can take some time)
+mir_targets <- get_multimir(org = "hsa", 
+                           mirna = demir_names,
+                           target = blue_module_genes,
+                           table = "validated",
+                           summary = TRUE)
+
+# Extract the results
+mir_target_df <- mir_targets@data
+
+# Save the miRNA-mRNA interactions
+#write.csv(mir_target_df, "mir_target_interactions.csv")
+```
+
+```{r}
+# Filter for interactions involving hub genes (based on the paper)
+hub_genes <- blue_top
+hub_gene_targets <- mir_target_df[mir_target_df$target_symbol %in% hub_genes, ]
+hub_gene_targets <- hub_gene_targets[, c(3, 4)]
+colnames(hub_gene_targets) <- c("Mature miRNA ID", "Gene Target")
+
+# Create a publication-ready table without row names
+kbl <- kable(hub_gene_targets,
+             row.names = FALSE,                     # Remove row names
+             booktabs = TRUE, 
+             align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                latex_options = c("hold_position", "scale_down"),
+                full_width = FALSE)
+
+kbl
+```
+
+## Survival Analysis of miRNAs
+```{r}
+#hsa_miR_125a_5p.csv
+data <- read.csv("miRNA_survival/hsa_miR_125a_5p.csv", header = TRUE, stringsAsFactors = FALSE)
+data$status_numeric <- ifelse(data$Status == "Dead", 1, 0)
+
+# Fit the Kaplan-Meier survival model
+# Replace 'time', 'status', and 'group' with your actual column names if they differ
+fit <- survfit(Surv(Days, status_numeric) ~ Group, data = data)
+
+# Plot the survival curve with confidence intervals and a risk table
+plot1 <- ggsurvplot(
+  fit, 
+  data = data,
+  pval = TRUE,
+  conf.int = FALSE,
+  risk.table = FALSE,
+  title = "Kaplan–Meier Survival Curve for hsa_miR_125a_5p",
+  xlab = "Time (months)",
+  ylab = "Survival Probability",
+  palette = c("blue", "red")
+)
+
+#hsa_miR_133b.csv
+data <- read.csv("miRNA_survival/hsa_miR_133b.csv", header = TRUE, stringsAsFactors = FALSE)
+data$status_numeric <- ifelse(data$Status == "Dead", 1, 0)
+
+# Fit the Kaplan-Meier survival model
+# Replace 'time', 'status', and 'group' with your actual column names if they differ
+fit <- survfit(Surv(Days, status_numeric) ~ Group, data = data)
+
+# Plot the survival curve with confidence intervals and a risk table
+plot2 <- ggsurvplot(
+  fit, 
+  data = data,
+  pval = TRUE,
+  conf.int = FALSE,
+  risk.table = FALSE,
+  title = "Kaplan–Meier Survival Curve for hsa_miR_133b",
+  xlab = "Time (months)",
+  ylab = "Survival Probability",
+  palette = c("blue", "red")
+)
+
+#hsa_miR_532_5p.csv
+data <- read.csv("miRNA_survival/hsa_miR_532_5p.csv", header = TRUE, stringsAsFactors = FALSE)
+data$status_numeric <- ifelse(data$Status == "Dead", 1, 0)
+
+# Fit the Kaplan-Meier survival model
+# Replace 'time', 'status', and 'group' with your actual column names if they differ
+fit <- survfit(Surv(Days, status_numeric) ~ Group, data = data)
+
+# Plot the survival curve with confidence intervals and a risk table
+plot3 <- ggsurvplot(
+  fit, 
+  data = data,
+  pval = TRUE,
+  conf.int = FALSE,
+  risk.table = FALSE,
+  title = "Kaplan–Meier Survival Curve for hsa_miR_532_5p",
+  xlab = "Time (months)",
+  ylab = "Survival Probability",
+  palette = c("blue", "red")
+)
+
+#hsa_miR_940.csv
+data <- read.csv("miRNA_survival/hsa_miR_940.csv", header = TRUE, stringsAsFactors = FALSE)
+data$status_numeric <- ifelse(data$Status == "Dead", 1, 0)
+
+# Fit the Kaplan-Meier survival model
+# Replace 'time', 'status', and 'group' with your actual column names if they differ
+fit <- survfit(Surv(Days, status_numeric) ~ Group, data = data)
+
+# Plot the survival curve with confidence intervals and a risk table
+plot4 <- ggsurvplot(
+  fit, 
+  data = data,
+  pval = TRUE,
+  conf.int = FALSE,
+  risk.table = FALSE,
+  title = "Kaplan–Meier Survival Curve for hsa_miR_940",
+  xlab = "Time (months)",
+  ylab = "Survival Probability",
+  palette = c("blue", "red")
+)
+
+arranged_plots <- arrange_ggsurvplots(list(plot1, plot2, plot3, plot4), 
+                                      ncol = 2, nrow = 2,
+                                      print = TRUE)
+```
+
