@@ -107,3 +107,12 @@ Install key R dependencies using:
 ```r
 install.packages(c("WGCNA", "limma", "clusterProfiler", "TCGAbiolinks", "multiMiR"))
 
+**Authors**
+**Sharanya Sheshadri** 
+Ellie Cates
+Saranya Guvvala
+Noah Hamilton
+
+**Citation** 
+If you use this project or parts of the analysis, please cite our course project. 
+
